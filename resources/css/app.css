@@ -7,3 +7,35 @@
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
+
+/* Pack visual: SweetAlert2 con el tema del campo. */
+.swal2-popup.swal-campo {
+    font-family: var(--font-sans);
+    border: 1px solid rgba(163, 230, 53, 0.35);
+    border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.swal2-popup.swal-campo .swal2-title {
+    font-weight: 800;
+}
+
+.swal2-popup.swal-campo.swal2-toast {
+    border-radius: 14px;
+    padding: 12px 16px;
+}
+
+.swal2-popup.swal-campo.swal2-toast .swal2-title {
+    font-size: 0.92rem;
+}
+
+.swal2-popup.swal-campo .swal-misiones {
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    text-align: left;
+}
+
+.swal2-popup.swal-campo .swal-misiones li {
+    margin: 3px 0;
+}

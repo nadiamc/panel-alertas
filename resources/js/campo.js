@@ -1,68 +1,79 @@
 import QRCode from 'qrcode';
 
-import { CULTIVOS, crearCampo, personaje } from './campo-logica';
+import { CULTIVOS, crearCampo } from './campo-logica';
+import { crearEscena } from './campo-escena';
+import { alertaMisiones, alertaNivel, alertaPlaga, confeti, confetiFiesta } from './fiesta';
+import { precargar, reproducir, silenciar } from './sonidos';
 
 const campo = crearCampo();
-const refs = {};
+
+let escena = null;
 
 let jugadores = {};
 let misiones = [];
 let misionesPrevias = [];
-let audioCtx = null;
 let sonidoOn = false;
 let echoConectado = false;
 let pollOk = false;
+let pollIniciado = false;
+let pollTimer = null;
 let primeraSync = true;
 
 const estadoUrl = document.querySelector('meta[name="campo-estado-url"]')?.content || '/campo/estado';
-const POLL_MS = 1200;
+const POLL_WS_MS = 15000;
+const POLL_HTTP_MS = 2500;
 
 /* ===================== Parcelas ===================== */
 
 function initParcelas() {
-    document.querySelectorAll('.parcela').forEach(function (el) {
-        const i = parseInt(el.dataset.parcela, 10);
+    const cont = document.getElementById('campo-escena');
 
-        refs[i] = {
-            el: el,
-            frutaEl: el.querySelector('[data-fruta]'),
-            autorEl: el.querySelector('.autor'),
-            agronomoEl: el.querySelector('.agronomo'),
-            autorTimer: null,
-        };
+    if (!cont) {
+        return;
+    }
 
+    for (let i = 0; i < 24; i++) {
         campo.datos(i);
+    }
+
+    escena = crearEscena(cont, {
+        total: 24,
+        estado: function (i) {
+            const d = campo.datos(i);
+
+            return {
+                cultivo: d.cultivo,
+                etapa: campo.etapa(i),
+                regada: d.regada,
+                plaga: d.plaga,
+                autor: d.autor,
+            };
+        },
     });
 }
 
 function renderParcela(i) {
-    const ref = refs[i];
-
-    if (!ref) {
-        return;
-    }
-
-    const d = campo.datos(i);
-    const conCultivo = !!d.cultivo;
-
-    ref.el.dataset.stage = String(campo.etapa(i));
-    ref.el.classList.toggle('regada', conCultivo && d.regada);
-    ref.el.classList.toggle('plaga', conCultivo && d.plaga);
-    ref.el.classList.toggle('ocupada', conCultivo);
-
-    if (ref.frutaEl) {
-        ref.frutaEl.textContent = conCultivo ? (CULTIVOS[d.cultivo] || '🌱') : '';
-    }
-
-    if (ref.agronomoEl) {
-        ref.agronomoEl.textContent = conCultivo ? personaje(d.autor) : '';
+    if (escena) {
+        escena.render(i);
     }
 }
 
 function renderTodo() {
-    Object.keys(refs).forEach(function (k) {
-        renderParcela(parseInt(k, 10));
-    });
+    if (escena) {
+        escena.renderTodo();
+    }
+}
+
+/**
+ * Destaca una parcela durante un instante para que el público note dónde
+ * acaba de pasar algo.
+ *
+ * @param {number} i
+ */
+function pulsar(i) {
+    if (escena) {
+        escena.pulsar(i);
+    }
 }
 
 /* ===================== UI general ===================== */
@@ -89,7 +100,13 @@ function setConexion() {
     }
 
     if (texto) {
-        texto.textContent = on ? 'En vivo' : 'Desconectado';
+        if (echoConectado) {
+            texto.textContent = 'En vivo';
+        } else if (pollOk) {
+            texto.textContent = 'Sincronizando';
+        } else {
+            texto.textContent = 'Desconectado';
+        }
     }
 }
 
@@ -124,28 +141,9 @@ function toast(mensaje) {
 }
 
 function mostrarAutor(i, autor) {
-    const ref = refs[i];
-
-    if (!ref || !autor) {
-        return;
+    if (escena && autor) {
+        escena.mostrarAutor(i, autor);
     }
-
-    let etiqueta = ref.autorEl;
-
-    if (!etiqueta) {
-        etiqueta = document.createElement('span');
-        etiqueta.className = 'autor';
-        ref.el.appendChild(etiqueta);
-        ref.autorEl = etiqueta;
-    }
-
-    etiqueta.textContent = autor;
-    etiqueta.classList.add('visible');
-
-    clearTimeout(ref.autorTimer);
-    ref.autorTimer = setTimeout(function () {
-        etiqueta.classList.remove('visible');
-    }, 5000);
 }
 
 /* ===================== Efectos ===================== */
@@ -166,28 +164,6 @@ function banner(texto, clase, ms) {
     }, ms || 2200);
 }
 
-function confeti(cantidad) {
-    const cont = document.getElementById('confeti');
-
-    if (!cont) {
-        return;
-    }
-
-    const colores = ['#fde047', '#4ade80', '#38bdf8', '#f472b6', '#f59e0b', '#a855f7', '#ef4444'];
-
-    for (let i = 0; i < cantidad; i++) {
-        const c = document.createElement('i');
-        c.style.left = Math.random() * 100 + 'vw';
-        c.style.background = colores[Math.floor(Math.random() * colores.length)];
-        c.style.animationDuration = (2 + Math.random() * 1.8) + 's';
-        c.style.animationDelay = (Math.random() * 0.3) + 's';
-        cont.appendChild(c);
-        setTimeout(function () {
-            c.remove();
-        }, 4400);
-    }
-}
-
 function sacudir() {
     document.body.classList.add('sacudir');
     setTimeout(function () {
@@ -196,54 +172,17 @@ function sacudir() {
 }
 
 function puntosPop(i, texto) {
-    const ref = refs[i];
-
-    if (!ref) {
-        return;
+    if (escena) {
+        escena.puntosPop(i, texto);
     }
-
-    const el = document.createElement('span');
-    el.className = 'puntos-pop';
-    el.textContent = texto;
-    ref.el.appendChild(el);
-
-    setTimeout(function () {
-        el.remove();
-    }, 1000);
 }
 
 /* ===================== Audio ===================== */
 
 function activarAudio() {
-    if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-
-    if (audioCtx.state === 'suspended') {
-        audioCtx.resume();
-    }
-
     sonidoOn = true;
-}
-
-function nota(freq, dur, tipo, delay) {
-    if (!sonidoOn || !audioCtx) {
-        return;
-    }
-
-    const t = audioCtx.currentTime + (delay || 0);
-    const osc = audioCtx.createOscillator();
-    const gan = audioCtx.createGain();
-
-    osc.type = tipo || 'sine';
-    osc.frequency.value = freq;
-    gan.gain.setValueAtTime(0.0001, t);
-    gan.gain.exponentialRampToValueAtTime(0.2, t + 0.02);
-    gan.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(gan);
-    gan.connect(audioCtx.destination);
-    osc.start(t);
-    osc.stop(t + dur + 0.05);
+    silenciar(false);
+    precargar();
 }
 
 function sonido(tipo) {
@@ -251,21 +190,7 @@ function sonido(tipo) {
         return;
     }
 
-    switch (tipo) {
-        case 'sembrar': nota(600, 0.12, 'sine'); break;
-        case 'regar': nota(420, 0.15, 'sine'); break;
-        case 'tratar': nota(700, 0.12, 'sine'); break;
-        case 'plaga': nota(140, 0.35, 'sawtooth'); break;
-        case 'cosechar':
-            nota(523, 0.12, 'triangle', 0);
-            nota(659, 0.12, 'triangle', 0.09);
-            nota(784, 0.2, 'triangle', 0.18);
-            break;
-        case 'clima':
-            nota(880, 0.1, 'sine', 0);
-            nota(660, 0.1, 'sine', 0.1);
-            break;
-    }
+    reproducir(tipo);
 }
 
 function colorAccion(tipo) {
@@ -278,18 +203,9 @@ function colorAccion(tipo) {
     }
 }
 
-function chispas(el, color, cantidad) {
-    for (let i = 0; i < cantidad; i++) {
-        const s = document.createElement('span');
-        s.className = 'chispa';
-        s.style.background = color;
-
-        const ang = Math.random() * Math.PI * 2;
-        const dist = 30 + Math.random() * 45;
-        s.style.setProperty('--dx', Math.cos(ang) * dist + 'px');
-        s.style.setProperty('--dy', Math.sin(ang) * dist + 'px');
-        el.appendChild(s);
-        setTimeout(function () { s.remove(); }, 780);
+function chispas(i, color, cantidad) {
+    if (escena) {
+        escena.chispas(i, color, cantidad);
     }
 }
 
@@ -384,6 +300,29 @@ function pintarMisiones() {
 
 /* ===================== Reacción al juego ===================== */
 
+/**
+ * Celebra una subida de nivel con modal, confeti y sonido.
+ *
+ * @param {string} nombre
+ * @param {number} nivel
+ */
+function celebrarNivel(nombre, nivel) {
+    alertaNivel(nombre, nivel);
+    confetiFiesta();
+    sonido('nivel');
+}
+
+/**
+ * Celebra una o varias misiones cumplidas.
+ *
+ * @param {string[]} textos
+ */
+function celebrarMisiones(textos) {
+    alertaMisiones(textos);
+    confetiFiesta();
+    sonido('mision');
+}
+
 function mostrarJuego(e) {
     const autor = (e.autor && e.autor.trim()) ? e.autor.trim() : 'Anónimo';
     const nivelPrevio = (jugadores[autor] && jugadores[autor].nivel) || 1;
@@ -398,7 +337,7 @@ function mostrarJuego(e) {
 
     if (e.tipo === 'cosechar') {
         banner('🚜 ¡' + autor + ' cosechó!', 'oro', 2200);
-        confeti(60);
+        confeti(90);
         sacudir();
     } else if (e.racha >= 3) {
         banner('🔥 ¡Racha x' + e.racha + '!  ' + autor, 'oro', 1600);
@@ -410,9 +349,8 @@ function mostrarJuego(e) {
 
     if (e.nivel > nivelPrevio) {
         setTimeout(function () {
-            banner('⭐ ¡' + autor + ' subió al Nivel ' + e.nivel + '!', '', 2500);
-            confeti(45);
-        }, 500);
+            celebrarNivel(autor, e.nivel);
+        }, 420);
     }
 
     if (Array.isArray(e.misiones)) {
@@ -422,12 +360,11 @@ function mostrarJuego(e) {
             });
         });
 
-        nuevas.forEach(function (m, i) {
+        if (nuevas.length > 0) {
             setTimeout(function () {
-                banner('🏆 ¡Misión cumplida: ' + m.texto + '!', 'oro', 2800);
-                confeti(55);
-            }, 900 + i * 400);
-        });
+                celebrarMisiones(nuevas.map(function (m) { return m.texto; }));
+            }, 850);
+        }
 
         misiones = e.misiones;
         misionesPrevias = e.misiones.map(function (m) { return { texto: m.texto, completada: m.completada }; });
@@ -444,6 +381,7 @@ function aplicarEvento(e) {
 
     campo.aplicar(e);
     renderParcela(e.parcela);
+    pulsar(e.parcela);
 
     switch (e.tipo) {
         case 'sembrar':
@@ -457,6 +395,8 @@ function aplicarEvento(e) {
             break;
         case 'plaga':
             toast('🐛 ¡Plaga en la parcela ' + (e.parcela + 1) + '!');
+            alertaPlaga(e.parcela + 1);
+            sacudir();
             break;
         case 'tratar':
             toast(quien + 'trató la parcela ' + (e.parcela + 1));
@@ -467,8 +407,12 @@ function aplicarEvento(e) {
             break;
     }
 
-    if (e.tipo !== 'clima' && refs[e.parcela]) {
-        chispas(refs[e.parcela].el, colorAccion(e.tipo), e.tipo === 'cosechar' ? 20 : 8);
+    if (e.tipo === 'cosechar' && escena) {
+        escena.cosecha(e.parcela);
+    }
+
+    if (e.tipo !== 'clima') {
+        chispas(e.parcela, colorAccion(e.tipo), e.tipo === 'cosechar' ? 20 : 8);
         mostrarAutor(e.parcela, e.autor);
     }
 
@@ -479,10 +423,12 @@ function aplicarEvento(e) {
 function alternarSonido(boton) {
     if (sonidoOn) {
         sonidoOn = false;
+        silenciar(true);
         boton.textContent = '🔇';
         boton.title = 'Activar sonido';
     } else {
         activarAudio();
+        reproducir('mision');
         boton.textContent = '🔊';
         boton.title = 'Silenciar';
     }
@@ -501,7 +447,6 @@ function alternarFullscreen() {
 function efectoCambio(c) {
     const nro = c.parcela + 1;
     const autor = c.autor || 'Anónimo';
-    const ref = refs[c.parcela];
 
     switch (c.tipo) {
         case 'sembrado':
@@ -510,19 +455,26 @@ function efectoCambio(c) {
         case 'cosechado':
             toast('🚜 cosecharon la parcela ' + nro);
             banner('🚜 ¡Cosecha!', 'oro', 2200);
-            confeti(60);
+            confeti(90);
             sacudir();
+
+            if (escena) {
+                escena.cosecha(c.parcela);
+            }
+
             break;
         case 'plaga':
             toast('🐛 ¡Plaga en la parcela ' + nro + '!');
+            alertaPlaga(nro);
+            sacudir();
             break;
         case 'tratado':
             toast(autor + ' trató la parcela ' + nro);
             break;
     }
 
-    if (ref && c.tipo !== 'cosechado') {
-        chispas(ref.el, colorAccion(c.tipo === 'sembrado' ? 'sembrar' : c.tipo), 8);
+    if (c.tipo !== 'cosechado') {
+        chispas(c.parcela, colorAccion(c.tipo === 'sembrado' ? 'sembrar' : c.tipo), 8);
         mostrarAutor(c.parcela, autor);
     }
 
@@ -546,30 +498,36 @@ function refrescar() {
             const jugadoresNuevos = s.jugadores || {};
             const misionesNuevas = Array.isArray(s.misiones) ? s.misiones : [];
 
-            cambios.forEach(function (c) { renderParcela(c.parcela); });
+            cambios.forEach(function (c) {
+                renderParcela(c.parcela);
+
+                if (!primeraSync) {
+                    pulsar(c.parcela);
+                }
+            });
 
             if (!primeraSync && !echoConectado) {
                 cambios.forEach(efectoCambio);
 
-                Object.keys(jugadoresNuevos).forEach(function (n) {
+                Object.keys(jugadoresNuevos).forEach(function (n, i) {
                     const ahora = jugadoresNuevos[n].nivel || 1;
 
                     if (ahora > (nivelesPrevios[n] || 1)) {
                         setTimeout(function () {
-                            banner('⭐ ¡' + n + ' subió al Nivel ' + ahora + '!', '', 2500);
-                            confeti(45);
-                        }, 400);
+                            celebrarNivel(n, ahora);
+                        }, 400 + i * 900);
                     }
                 });
 
-                misionesNuevas.forEach(function (m, i) {
-                    if (m.completada && misionesHechas.indexOf(m.texto) === -1) {
-                        setTimeout(function () {
-                            banner('🏆 ¡Misión cumplida: ' + m.texto + '!', 'oro', 2800);
-                            confeti(55);
-                        }, 900 + i * 400);
-                    }
-                });
+                const misionesNuevasHechas = misionesNuevas
+                    .filter(function (m) { return m.completada && misionesHechas.indexOf(m.texto) === -1; })
+                    .map(function (m) { return m.texto; });
+
+                if (misionesNuevasHechas.length > 0) {
+                    setTimeout(function () {
+                        celebrarMisiones(misionesNuevasHechas);
+                    }, 900);
+                }
             }
 
             primeraSync = false;
@@ -597,9 +555,45 @@ function refrescar() {
         });
 }
 
+/**
+ * Programa el próximo sondeo HTTP. Con WebSocket conectado solo se consulta
+ * cada tanto como red de seguridad; si el WS no está disponible se sondea más
+ * seguido para que el visor igual se mantenga al día.
+ */
+function programarPoll() {
+    clearTimeout(pollTimer);
+
+    if (!pollIniciado || document.hidden) {
+        return;
+    }
+
+    pollTimer = setTimeout(function () {
+        refrescar().finally(programarPoll);
+    }, echoConectado ? POLL_WS_MS : POLL_HTTP_MS);
+}
+
 function iniciarSincronizacion() {
-    refrescar();
-    setInterval(refrescar, POLL_MS);
+    pollIniciado = true;
+    refrescar().finally(programarPoll);
+}
+
+function marcarConexion(conectado) {
+    if (echoConectado === conectado) {
+        return;
+    }
+
+    echoConectado = conectado;
+    setConexion();
+
+    if (!pollIniciado) {
+        return;
+    }
+
+    if (conectado) {
+        refrescar().finally(programarPoll);
+    } else {
+        programarPoll();
+    }
 }
 
 function dibujarQr() {
@@ -612,7 +606,12 @@ function dibujarQr() {
     QRCode.toCanvas(canvas, canvas.dataset.url, { width: canvas.width, margin: 1 }, function (err) {
         if (err) {
             console.error(err);
+
+            return;
         }
+
+        canvas.style.removeProperty('width');
+        canvas.style.removeProperty('height');
     });
 }
 
@@ -627,10 +626,25 @@ function conectar() {
 
     const pusher = window.Echo.connector && window.Echo.connector.pusher;
 
-    if (pusher) {
-        pusher.connection.bind('connected', function () { echoConectado = true; setConexion(); });
-        pusher.connection.bind('disconnected', function () { echoConectado = false; setConexion(); });
-        pusher.connection.bind('unavailable', function () { echoConectado = false; setConexion(); });
+    if (!pusher) {
+        return;
+    }
+
+    pusher.connection.bind('connected', function () {
+        marcarConexion(true);
+    });
+    pusher.connection.bind('disconnected', function () {
+        marcarConexion(false);
+    });
+    pusher.connection.bind('unavailable', function () {
+        marcarConexion(false);
+    });
+    pusher.connection.bind('failed', function () {
+        marcarConexion(false);
+    });
+
+    if (pusher.connection.state === 'connected') {
+        marcarConexion(true);
     }
 }
 
@@ -642,8 +656,18 @@ document.addEventListener('DOMContentLoaded', function () {
     initParcelas();
     pintarMisiones();
     dibujarQr();
-    iniciarSincronizacion();
     conectar();
+    iniciarSincronizacion();
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            clearTimeout(pollTimer);
+
+            return;
+        }
+
+        refrescar().finally(programarPoll);
+    });
 
     setInterval(function () {
         campo.avanzar();
