@@ -252,9 +252,12 @@ class CampoController extends Controller
      *
      * Prioridad:
      * 1. Parámetro ?publico= (URL del túnel de Cloudflare u otro host público).
-     * 2. APP_URL cuando no apunta a un host local.
-     * 3. La propia petición si no es local.
-     * 4. La IP de red local (misma WiFi).
+     * 2. URL pública guardada por el comando campo:tunel.
+     * 3. APP_URL cuando no apunta a un host local.
+     * 4. La propia petición si no es local.
+     * 5. La IP de red local (misma WiFi).
+     *
+     * Con ?local=1 se ignora la URL pública y se usa la red local.
      */
     private function controlUrl(Request $request): string
     {
@@ -262,6 +265,10 @@ class CampoController extends Controller
 
         if (is_string($publica) && $this->esUrlPublica($publica)) {
             return rtrim($publica, '/').'/control';
+        }
+
+        if (! $request->boolean('local') && ($tunel = $this->urlPublicaGuardada()) !== null) {
+            return rtrim($tunel, '/').'/control';
         }
 
         $appUrl = (string) config('app.url');
@@ -283,6 +290,22 @@ class CampoController extends Controller
         }
 
         return $request->getScheme().'://'.$host.'/control';
+    }
+
+    /**
+     * URL pública que dejó el comando campo:tunel mientras está corriendo.
+     */
+    private function urlPublicaGuardada(): ?string
+    {
+        $archivo = storage_path('app/campo-tunel.txt');
+
+        if (! is_file($archivo)) {
+            return null;
+        }
+
+        $url = trim((string) file_get_contents($archivo));
+
+        return $this->esUrlPublica($url) ? $url : null;
     }
 
     private function esUrlPublica(string $url): bool
