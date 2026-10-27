@@ -18,6 +18,13 @@ class CampoAccionTest extends TestCase
         $this->get('/control')->assertOk()->assertSee('Acción');
     }
 
+    public function test_visor_usa_la_url_publica_indicada_en_el_qr(): void
+    {
+        $this->get('/visor?publico=https://demo.trycloudflare.com')
+            ->assertOk()
+            ->assertSee('https://demo.trycloudflare.com/control');
+    }
+
     public function test_accion_valida_emite_evento_con_payload(): void
     {
         Event::fake([AccionCampo::class]);
