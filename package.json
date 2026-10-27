@@ -18,5 +18,11 @@
     },
     "optionalDependencies": {
         "@laravel/multiplex": "^0.4.1"
+    },
+    "dependencies": {
+        "canvas-confetti": "^1.9.4",
+        "howler": "^2.2.4",
+        "phaser": "^4.2.1",
+        "sweetalert2": "^11.26.25"
     }
 }
