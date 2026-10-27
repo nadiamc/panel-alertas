@@ -70,6 +70,13 @@
             padding: 4px 9px;
         }
 
+        .badge-btn {
+            color: inherit;
+            font: inherit;
+            line-height: 1;
+            cursor: pointer;
+        }
+
         .punto {
             width: 9px; height: 9px; border-radius: 50%;
             background: #ef4444; display: inline-block; margin-right: 4px;
@@ -333,6 +340,7 @@
             <span class="badge" id="clima" title="Día despejado">☀️</span>
             <span class="badge">⚡ <span id="acciones">0</span></span>
             <span class="badge"><span class="punto" id="conexion"></span></span>
+            <button type="button" class="badge badge-btn" id="btn-sonido" title="Silenciar sonidos">🔊</button>
         </div>
     </div>
     <p class="sub">Tocá una parcela y una acción. Todo lo que pasa se ve en vivo.</p>

@@ -1,18 +1,27 @@
 import { CULTIVOS, crearCampo, personaje } from './campo-logica';
+import { alertaAviso, alertaError, alertaMisiones, alertaNivel, confetiFiesta } from './fiesta';
+import { precargar, reproducir, silenciar } from './sonidos';
 
 const campo = crearCampo();
 const refs = {};
 
 let jugadores = {};
 let misiones = [];
+let misionesPrevias = [];
 let miNombre = '';
 let seleccion = null;
 let primeraSync = true;
+let echoConectado = false;
+let pollOk = false;
+let pollIniciado = false;
+let pollTimer = null;
+let sonidoOn = true;
 
 const estadoUrl = document.querySelector('meta[name="campo-estado-url"]')?.content || '/campo/estado';
 const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
-const INTERVALO_MS = 1200;
+const POLL_WS_MS = 15000;
+const POLL_HTTP_MS = 2000;
 
 /* ===================== Parcelas ===================== */
 
@@ -169,6 +178,10 @@ function setConexion(on) {
     }
 }
 
+function actualizarConexion() {
+    setConexion(echoConectado || pollOk);
+}
+
 function setAcciones(total) {
     const el = document.getElementById('acciones');
 
@@ -309,6 +322,57 @@ function pintarProgreso() {
     }
 }
 
+/* ===================== Celebraciones ===================== */
+
+/**
+ * Modal, confeti y sonido cuando el jugador del celular sube de nivel.
+ *
+ * @param {number} nivel
+ */
+function celebrarNivelPropio(nivel) {
+    alertaNivel(miNombre || 'Vos', nivel);
+    confetiFiesta();
+    reproducir('nivel');
+
+    if (navigator.vibrate) {
+        navigator.vibrate([40, 60, 40]);
+    }
+}
+
+/**
+ * Celebra las misiones recién completadas.
+ *
+ * @param {string[]} textos
+ */
+function celebrarMisiones(textos) {
+    if (textos.length === 0) {
+        return;
+    }
+
+    alertaMisiones(textos);
+    reproducir('mision');
+
+    if (navigator.vibrate) {
+        navigator.vibrate(60);
+    }
+}
+
+/**
+ * Devuelve los textos de las misiones que se completaron desde la última vez.
+ *
+ * @param {Array<{texto: string, completada: boolean}>} nuevas
+ * @returns {string[]}
+ */
+function misionesRecienCumplidas(nuevas) {
+    const antes = misionesPrevias
+        .filter(function (m) { return m.completada; })
+        .map(function (m) { return m.texto; });
+
+    return (nuevas || [])
+        .filter(function (m) { return m.completada && antes.indexOf(m.texto) === -1; })
+        .map(function (m) { return m.texto; });
+}
+
 /* ===================== Sincronización por HTTP ===================== */
 
 function descripcionCambio(c) {
@@ -330,9 +394,14 @@ function refrescar() {
         .then(function (s) {
             const nivelPrevio = (miNombre && jugadores[miNombre]) ? jugadores[miNombre].nivel : 1;
             const cambios = campo.sincronizar(s.parcelas || {});
+            const misionesServidor = Array.isArray(s.misiones) ? s.misiones : [];
+            const recienCumplidas = misionesRecienCumplidas(misionesServidor);
 
             jugadores = s.jugadores || {};
-            misiones = s.misiones || [];
+            misiones = misionesServidor;
+            misionesPrevias = misiones.map(function (m) {
+                return { texto: m.texto, completada: m.completada };
+            });
 
             if (typeof s.acciones === 'number') {
                 setAcciones(s.acciones);
@@ -348,8 +417,10 @@ function refrescar() {
                 });
 
                 if (miNombre && jugadores[miNombre] && jugadores[miNombre].nivel > nivelPrevio) {
-                    aviso('⭐ ¡Subiste al Nivel ' + jugadores[miNombre].nivel + '!');
+                    celebrarNivelPropio(jugadores[miNombre].nivel);
                 }
+
+                celebrarMisiones(recienCumplidas);
             }
 
             primeraSync = false;
@@ -358,23 +429,184 @@ function refrescar() {
             pintarRanking();
             pintarMisiones();
             pintarProgreso();
-            setConexion(true);
+
+            pollOk = true;
+            actualizarConexion();
         })
         .catch(function () {
-            setConexion(false);
+            pollOk = false;
+            actualizarConexion();
         });
 }
 
+/**
+ * Aplica un evento recibido por WebSocket sin pedirle nada más al servidor.
+ *
+ * @param {object} e
+ */
+function aplicarRemoto(e) {
+    const autor = (e.autor || '').trim();
+    const nivelPrevio = (miNombre && jugadores[miNombre]) ? jugadores[miNombre].nivel : 1;
+
+    campo.aplicar(e);
+
+    const d = campo.datos(e.parcela);
+    const estado = e.parcelaEstado;
+
+    if (estado) {
+        d.cultivo = estado.cultivo || null;
+        d.autor = estado.autor || null;
+        d.plaga = !!estado.plaga;
+
+        if (!estado.cultivo) {
+            d.progreso = 0;
+            d.madura = false;
+            d.regada = false;
+        }
+    }
+
+    if (e.tipo === 'regar' && d.cultivo) {
+        d.regada = true;
+    }
+
+    renderParcela(e.parcela);
+    actualizarSeleccion();
+
+    if (e.jugadores) {
+        jugadores = e.jugadores;
+    }
+
+    let recienCumplidas = [];
+
+    if (Array.isArray(e.misiones)) {
+        recienCumplidas = misionesRecienCumplidas(e.misiones);
+        misiones = e.misiones;
+        misionesPrevias = misiones.map(function (m) {
+            return { texto: m.texto, completada: m.completada };
+        });
+    }
+
+    if (typeof e.acciones === 'number') {
+        setAcciones(e.acciones);
+    }
+
+    pintarRanking();
+    pintarMisiones();
+    pintarProgreso();
+
+    if (autor && autor !== miNombre) {
+        avisarEvento(e, autor);
+    }
+
+    if (miNombre && jugadores[miNombre] && jugadores[miNombre].nivel > nivelPrevio) {
+        celebrarNivelPropio(jugadores[miNombre].nivel);
+    }
+
+    celebrarMisiones(recienCumplidas);
+}
+
+function avisarEvento(e, autor) {
+    const nro = e.parcela + 1;
+
+    switch (e.tipo) {
+        case 'sembrar':
+            aviso(autor + ' sembró ' + (CULTIVOS[e.valor] || '🌱') + ' en la ' + nro);
+            break;
+        case 'cosechar':
+            aviso('🚜 ' + autor + ' cosechó la ' + nro);
+            break;
+        case 'plaga':
+            aviso('🐛 ¡plaga en la ' + nro + '!');
+            break;
+        case 'tratar':
+            aviso('🧪 ' + autor + ' trató la ' + nro);
+            break;
+        case 'clima':
+            aviso(e.valor === 'lluvia' ? '🌧️ Llegó la lluvia' : '☀️ Salió el sol');
+            break;
+    }
+}
+
+/**
+ * Programa el próximo sondeo HTTP. Con WebSocket conectado alcanza con un
+ * latido cada tanto; sin WS se consulta más seguido como respaldo.
+ */
+function programarPoll() {
+    clearTimeout(pollTimer);
+
+    if (!pollIniciado || document.hidden) {
+        return;
+    }
+
+    const espera = echoConectado ? POLL_WS_MS : POLL_HTTP_MS;
+
+    pollTimer = setTimeout(function () {
+        refrescar().finally(programarPoll);
+    }, espera + Math.floor(Math.random() * 300));
+}
+
 function iniciarPolling() {
-    refrescar();
-    setInterval(refrescar, INTERVALO_MS);
+    pollIniciado = true;
+    refrescar().finally(programarPoll);
+}
+
+function marcarConexion(conectado) {
+    if (echoConectado === conectado) {
+        return;
+    }
+
+    echoConectado = conectado;
+    actualizarConexion();
+
+    if (!pollIniciado) {
+        return;
+    }
+
+    if (conectado) {
+        refrescar().finally(programarPoll);
+    } else {
+        programarPoll();
+    }
+}
+
+function conectar() {
+    if (!window.Echo) {
+        setTimeout(conectar, 200);
+
+        return;
+    }
+
+    window.Echo.channel('campo').listen('.AccionCampo', aplicarRemoto);
+
+    const pusher = window.Echo.connector && window.Echo.connector.pusher;
+
+    if (!pusher) {
+        return;
+    }
+
+    pusher.connection.bind('connected', function () {
+        marcarConexion(true);
+    });
+    pusher.connection.bind('disconnected', function () {
+        marcarConexion(false);
+    });
+    pusher.connection.bind('unavailable', function () {
+        marcarConexion(false);
+    });
+    pusher.connection.bind('failed', function () {
+        marcarConexion(false);
+    });
+
+    if (pusher.connection.state === 'connected') {
+        marcarConexion(true);
+    }
 }
 
 /* ===================== Enviar acciones ===================== */
 
 function enviar(tipo, valor) {
     if (tipo !== 'clima' && seleccion === null) {
-        aviso('Primero elegí una parcela 🌱');
+        alertaAviso('Primero elegí una parcela 🌱');
         return;
     }
 
@@ -388,6 +620,12 @@ function enviar(tipo, valor) {
     fd.append('valor', valor || '');
     fd.append('autor', miNombre);
 
+    reproducir(tipo === 'clima' ? 'clima' : tipo);
+
+    if (navigator.vibrate) {
+        navigator.vibrate(25);
+    }
+
     fetch(url, {
         method: 'POST',
         headers: { 'X-CSRF-TOKEN': csrf, Accept: 'application/json' },
@@ -399,11 +637,49 @@ function enviar(tipo, valor) {
             }
 
             aviso(tipo === 'clima' ? 'Clima actualizado' : '¡Acción enviada!');
-            refrescar();
+
+            if (!echoConectado) {
+                refrescar().finally(programarPoll);
+            }
         })
         .catch(function () {
-            aviso('No se pudo enviar, reintentá');
+            alertaError('No se pudo enviar, reintentá');
         });
+}
+
+function initSonido() {
+    const boton = document.getElementById('btn-sonido');
+    const guardado = localStorage.getItem('campo.sonido');
+
+    sonidoOn = guardado !== 'off';
+    silenciar(!sonidoOn);
+
+    if (sonidoOn) {
+        precargar();
+    }
+
+    if (!boton) {
+        return;
+    }
+
+    const pintar = function () {
+        boton.textContent = sonidoOn ? '🔊' : '🔇';
+        boton.title = sonidoOn ? 'Silenciar sonidos' : 'Activar sonidos';
+    };
+
+    pintar();
+
+    boton.addEventListener('click', function () {
+        sonidoOn = !sonidoOn;
+        silenciar(!sonidoOn);
+        localStorage.setItem('campo.sonido', sonidoOn ? 'on' : 'off');
+        pintar();
+
+        if (sonidoOn) {
+            precargar();
+            reproducir('sembrar');
+        }
+    });
 }
 
 function initFormulario() {
@@ -445,8 +721,20 @@ document.addEventListener('DOMContentLoaded', function () {
 
     initParcelas();
     initFormulario();
+    initSonido();
     actualizarSeleccion();
+    conectar();
     iniciarPolling();
+
+    document.addEventListener('visibilitychange', function () {
+        if (document.hidden) {
+            clearTimeout(pollTimer);
+
+            return;
+        }
+
+        refrescar().finally(programarPoll);
+    });
 
     setInterval(function () {
         campo.avanzar();
